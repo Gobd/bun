@@ -60,6 +60,7 @@ describe.concurrent("bun test --isolate", () => {
       `,
       "environment.ts": `
         import { token } from "./environment-state";
+        import { basename, isAbsolute } from "node:path";
         console.log("environment:evaluate");
         let previousGlobal: typeof globalThis | undefined;
         export default {
@@ -68,8 +69,9 @@ describe.concurrent("bun test --isolate", () => {
               throw new Error("environment module registry was cleared");
             }
             if (testGlobal === previousGlobal) throw new Error("test global was reused");
+            if (!isAbsolute(testPath)) throw new Error("testPath was not absolute: " + testPath);
             previousGlobal = testGlobal;
-            console.log("environment:setup:" + testPath.split(/[\\\\/]/).at(-1));
+            console.log("environment:setup:" + basename(testPath));
             (testGlobal as any).environmentMarker = testPath;
             return {
               marker: "receiver",
@@ -95,7 +97,7 @@ describe.concurrent("bun test --isolate", () => {
     const { stdout, stderr, exitCode } = await runTests(
       String(dir),
       ["--environment", "./environment.ts"],
-      ["./a.test.ts", "./b.test.ts"],
+      ["./a.test.ts", join(String(dir), "b.test.ts")],
     );
     expect(normalizeBunSnapshot(stdout, dir)).toMatchInlineSnapshot(`
       "bun test <version> (<revision>)
@@ -110,16 +112,63 @@ describe.concurrent("bun test --isolate", () => {
     expect(exitCode).toBe(0);
   });
 
+  test("--environment revalidates setup before every file", async () => {
+    using dir = tempDir("test-environment-mutated-setup", {
+      "environment.ts": `
+        export default {
+          setup() {
+            this.setup = undefined;
+          },
+        };
+      `,
+      "a.test.ts": `import { test } from "bun:test"; test("a", () => {});`,
+      "b.test.ts": `import { test } from "bun:test"; test("b", () => {});`,
+    });
+
+    const { stderr, exitCode } = await runTests(
+      String(dir),
+      ["--environment", "./environment.ts"],
+      ["./a.test.ts", "./b.test.ts"],
+    );
+    expect(normalizeBunSnapshot(stderr, dir)).toContain(
+      "error: test environment default export must have a setup function",
+    );
+    expect(exitCode).toBe(1);
+  });
+
+  test("--environment runs teardown before --bail exits", async () => {
+    using dir = tempDir("test-environment-bail-teardown", {
+      "environment.ts": `
+        import { writeFileSync } from "node:fs";
+        export default {
+          setup() {
+            return () => writeFileSync("teardown.txt", "ran");
+          },
+        };
+      `,
+      "a.test.ts": `import "./missing";`,
+    });
+
+    const { stderr, exitCode } = await runTests(
+      String(dir),
+      ["--environment", "./environment.ts", "--bail=1"],
+      ["./a.test.ts"],
+    );
+    expect(normalizeBunSnapshot(stderr, dir)).toContain("Bailed out after 1 failure");
+    expect(fs.readFileSync(join(String(dir), "teardown.txt"), "utf8")).toBe("ran");
+    expect(exitCode).toBe(1);
+  });
+
   test("--environment conflicts with --no-isolate", async () => {
     using dir = tempDir("test-environment-no-isolate", {
       "environment.ts": `export default { setup() {} };`,
       "a.test.ts": `import { test } from "bun:test"; test("a", () => {});`,
     });
-    const { stderr, exitCode } = await runTests(String(dir), [
-      "--environment",
-      "./environment.ts",
-      "--no-isolate",
-    ], ["./a.test.ts"]);
+    const { stderr, exitCode } = await runTests(
+      String(dir),
+      ["--environment", "./environment.ts", "--no-isolate"],
+      ["./a.test.ts"],
+    );
     expect(stderr).toContain("--environment cannot be used with --no-isolate");
     expect(exitCode).toBe(1);
   });

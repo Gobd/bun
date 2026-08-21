@@ -2,9 +2,10 @@
 // per-file preloads with a persistent worker-level environment.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 
-const files = Number(process.argv[2] ?? 100);
+const filesArg = process.argv[2] ?? "100";
+const files = Number(filesArg);
 if (!Number.isSafeInteger(files) || files < 1 || files > 10_000) {
-  throw new Error(`files must be an integer in [1, 10000], got ${files}`);
+  throw new Error(`files must be an integer in [1, 10000], got ${JSON.stringify(filesArg)}`);
 }
 
 const root = import.meta.dir + "/suite";

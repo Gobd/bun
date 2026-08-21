@@ -2,35 +2,49 @@ import { expect, test } from "bun:test";
 import { bunEnv, bunExe, isASAN, isDebug, isWindows, normalizeBunSnapshot, tempDir, tls } from "harness";
 
 test("--parallel forwards --environment to workers", async () => {
-  const fixture = `import { expect, test } from "bun:test"; test("environment", () => expect((globalThis as any).workerEnvironment).toBe(true));`;
+  const fixture = `
+    import { expect, test } from "bun:test";
+    import { readdirSync, writeFileSync } from "node:fs";
+    const worker = process.env.BUN_TEST_WORKER_ID!;
+    writeFileSync("ready-" + worker, "");
+    const deadline = Date.now() + 5000;
+    while (readdirSync(".").filter(name => name.startsWith("ready-")).length < 2) {
+      if (Date.now() >= deadline) throw new Error("second test worker did not start");
+      await Bun.sleep(5);
+    }
+    test("environment", () => expect((globalThis as any).workerEnvironment).toBe(true));
+  `;
   using dir = tempDir("parallel-environment", {
     "environment with spaces.ts": `
-      console.log("environment worker=" + process.env.BUN_TEST_WORKER_ID);
+      const worker = process.env.BUN_TEST_WORKER_ID;
+      console.log("environment:evaluate:" + worker);
       export default {
         setup(global: typeof globalThis) {
+          console.log("environment:setup:" + worker);
           (global as any).workerEnvironment = true;
-          return () => delete (global as any).workerEnvironment;
+          return () => {
+            console.log("environment:teardown:" + worker);
+            delete (global as any).workerEnvironment;
+          };
         },
       };
     `,
     "a.test.ts": fixture,
     "b.test.ts": fixture,
-    "c.test.ts": fixture,
   });
   await using proc = Bun.spawn({
     cmd: [bunExe(), "test", "--parallel=2", "--environment", "./environment with spaces.ts"],
-    env: { ...bunEnv, BUN_TEST_PARALLEL_SCALE_MS: "1000000" },
+    env: { ...bunEnv, BUN_TEST_PARALLEL_SCALE_MS: "0" },
     cwd: String(dir),
     stderr: "pipe",
     stdout: "pipe",
   });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    proc.stdout.text(),
-    proc.stderr.text(),
-    proc.exited,
-  ]);
-  expect((stdout + stderr).match(/environment worker=1/g)).toHaveLength(1);
-  expect(stderr).toContain("3 pass");
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  const events = [...(stdout + stderr).matchAll(/environment:(evaluate|setup|teardown):(\d+)/g)]
+    .map(match => `${match[1]}:${match[2]}`)
+    .sort();
+  expect(events).toEqual(["evaluate:1", "evaluate:2", "setup:1", "setup:2", "teardown:1", "teardown:2"]);
+  expect(stderr).toContain("2 pass");
   expect(exitCode).toBe(0);
 });
 

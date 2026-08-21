@@ -3321,6 +3321,10 @@ impl TestCommand {
                         reporter.write_timings_if_needed();
 
                         vm.exit_handler.exit_code = 1;
+                        scopeguard::ScopeGuard::into_inner(environment_guard);
+                        if crate::test_runner::environment::teardown_file(vm).is_err() {
+                            Output::flush();
+                        }
                         vm.is_shutting_down = true;
                         // `global_exit()` diverges, so the `exit_file()` defer
                         // above never fires. Release the active file's

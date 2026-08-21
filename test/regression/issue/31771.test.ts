@@ -60,16 +60,21 @@ async function peakRssMb(dir: string, n: number): Promise<number> {
         const status = fs.readFileSync(statusPath, "utf8");
         const m = status.match(/VmHWM:\s*(\d+)\s*kB/);
         if (m) peakKb = Math.max(peakKb, parseInt(m[1], 10));
-      } catch {
-        // process gone
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
       await Bun.sleep(2);
     }
   })();
 
-  const [stderr, exitCode] = await Promise.all([proc.stderr.text(), proc.exited]);
-  running = false;
-  await poll;
+  let stderr: string;
+  let exitCode: number;
+  try {
+    [stderr, exitCode] = await Promise.all([proc.stderr.text(), proc.exited]);
+  } finally {
+    running = false;
+    await poll;
+  }
 
   // Combined assertion so a failed/killed child surfaces its stderr tail,
   // exit code, and signal together in one diff.

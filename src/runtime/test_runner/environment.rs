@@ -44,16 +44,7 @@ pub(crate) fn initialize(vm: &mut VirtualMachine) -> crate::Result<()> {
         );
         return Err(crate::Error::JSError);
     }
-    let setup = environment.get(host, b"setup")?.ok_or_else(|| {
-        bun_core::pretty_errorln!(
-            "<red>error<r>: test environment default export must have a setup function"
-        );
-        crate::Error::JSError
-    })?;
-    if !setup.is_callable() {
-        bun_core::pretty_errorln!("<red>error<r>: test environment setup must be callable");
-        return Err(crate::Error::JSError);
-    }
+    get_setup(environment, host)?;
 
     let state = vm.test_isolation_state.environment.as_mut().unwrap();
     state.host_global = core::ptr::NonNull::new(host_global);
@@ -74,9 +65,7 @@ pub(crate) fn setup_file(vm: &mut VirtualMachine, test_path: &[u8]) -> crate::Re
         .get()
         .expect("rooted environment export");
     let host = JSGlobalObject::opaque_ref(host_ptr);
-    let setup = environment
-        .get(host, b"setup")?
-        .expect("setup was validated during environment initialization");
+    let setup = get_setup(environment, host)?;
 
     let test_global = vm.global();
     let context = JSValue::create_empty_object(test_global, 1);
@@ -89,6 +78,7 @@ pub(crate) fn setup_file(vm: &mut VirtualMachine, test_path: &[u8]) -> crate::Re
         .call(host, environment, &[test_global.to_js_value(), context])
         .map_err(|err| report_thrown(vm, host_ptr, err))?;
     let result = await_value(vm, host_ptr, result)?;
+    let _protected = result.protected();
 
     if !result.is_undefined_or_null() {
         if result.is_callable() {
@@ -155,6 +145,20 @@ pub(crate) fn teardown_file(vm: &mut VirtualMachine) -> crate::Result<()> {
     state.file_handle.clear_without_deallocation();
     state.lifecycle = TestEnvironmentLifecycle::Ready;
     result
+}
+
+fn get_setup(environment: JSValue, host: &JSGlobalObject) -> crate::Result<JSValue> {
+    let setup = environment.get(host, b"setup")?.ok_or_else(|| {
+        bun_core::pretty_errorln!(
+            "<red>error<r>: test environment default export must have a setup function"
+        );
+        crate::Error::JSError
+    })?;
+    if !setup.is_callable() {
+        bun_core::pretty_errorln!("<red>error<r>: test environment setup must be callable");
+        return Err(crate::Error::JSError);
+    }
+    Ok(setup)
 }
 
 fn await_value(

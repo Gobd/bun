@@ -1744,8 +1744,6 @@ impl VirtualMachine {
             self.is_inside_deferred_task_queue.set(false);
         }
 
-        self.release_test_environment_host();
-
         self.is_shutting_down = true;
 
         // Make sure we run new cleanup hooks introduced by running cleanup
@@ -1784,6 +1782,7 @@ impl VirtualMachine {
 
     pub fn global_exit(&mut self) -> ! {
         debug_assert!(self.is_shutting_down());
+        self.release_test_environment_host();
         // FIXME: we should be doing this, but we're not, but unfortunately
         // doing it causes like 50+ tests to break
         // self.event_loop().tick();

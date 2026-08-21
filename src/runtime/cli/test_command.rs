@@ -3272,14 +3272,19 @@ impl TestCommand {
                 );
             }
 
-            crate::test_runner::environment::setup_file(vm, file_path)?;
-            let environment_vm = std::ptr::from_mut::<VirtualMachine>(vm);
-            let environment_guard = scopeguard::guard((), move |_| {
-                // SAFETY: the guard is scoped to this loop iteration and `vm`
-                // remains exclusively borrowed by `run` for that duration.
-                let _ =
-                    unsafe { crate::test_runner::environment::teardown_file(&mut *environment_vm) };
-            });
+            let environment_guard = if vm.test_isolation_state.environment.is_some() {
+                crate::test_runner::environment::setup_file(vm, file_path)?;
+                let environment_vm = std::ptr::from_mut::<VirtualMachine>(vm);
+                Some(scopeguard::guard((), move |_| {
+                    // SAFETY: the guard is scoped to this loop iteration and `vm`
+                    // remains exclusively borrowed by `run` for that duration.
+                    let _ = unsafe {
+                        crate::test_runner::environment::teardown_file(&mut *environment_vm)
+                    };
+                }))
+            } else {
+                None
+            };
 
             bun_output::scoped_log!(
                 bun_test,
@@ -3321,9 +3326,11 @@ impl TestCommand {
                         reporter.write_timings_if_needed();
 
                         vm.exit_handler.exit_code = 1;
-                        scopeguard::ScopeGuard::into_inner(environment_guard);
-                        if crate::test_runner::environment::teardown_file(vm).is_err() {
-                            Output::flush();
+                        if let Some(environment_guard) = environment_guard {
+                            scopeguard::ScopeGuard::into_inner(environment_guard);
+                            if crate::test_runner::environment::teardown_file(vm).is_err() {
+                                Output::flush();
+                            }
                         }
                         vm.is_shutting_down = true;
                         // `global_exit()` diverges, so the `exit_file()` defer
@@ -3418,8 +3425,10 @@ impl TestCommand {
                 vm.auto_killer.disable();
             }
 
-            scopeguard::ScopeGuard::into_inner(environment_guard);
-            crate::test_runner::environment::teardown_file(vm)?;
+            if let Some(environment_guard) = environment_guard {
+                scopeguard::ScopeGuard::into_inner(environment_guard);
+                crate::test_runner::environment::teardown_file(vm)?;
+            }
 
             repeat_index += 1;
         }

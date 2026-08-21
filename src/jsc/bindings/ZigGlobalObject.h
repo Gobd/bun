@@ -769,6 +769,7 @@ public:
     size_t reloadCount = 0;
 
     void reload();
+    void clearModuleRegistry();
 
     // Drop the ESM module registry and CJS require cache so module state becomes collectable.
     void clearModuleRegistry();
@@ -885,6 +886,8 @@ public:
 } // namespace Zig
 
 namespace Bun {
+
+void putDirectNamed(JSC::VM&, JSC::JSObject*, ASCIILiteral name, JSC::JSValue);
 
 ALWAYS_INLINE void* vm(Zig::GlobalObject* globalObject)
 {

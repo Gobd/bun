@@ -1013,6 +1013,17 @@ impl VirtualMachine {
         unsafe { EventLoop::enter_scope(self.event_loop) }
     }
 
+    /// `event_loop().enter()` now, `.exit_without_checkpoint()` on drop, for a
+    /// dispatcher that drains microtasks itself: see
+    /// [`EventLoop::enter_scope_without_checkpoint`].
+    #[inline]
+    pub fn enter_event_loop_scope_without_checkpoint(
+        &self,
+    ) -> crate::event_loop::EventLoopEnterNoCheckpointGuard {
+        // SAFETY: as `enter_event_loop_scope`.
+        unsafe { EventLoop::enter_scope_without_checkpoint(self.event_loop) }
+    }
+
     /// Safe shared-reference accessor for the process-lifetime dotenv loader
     /// (`vm.transpiler.env`). The loader is allocated once during VM init and
     /// never freed; callers previously open-coded `unsafe { &*vm.transpiler.env }`.
@@ -3558,9 +3569,9 @@ impl VirtualMachine {
         L::None
     }
 
-    /// Resolves a MIME type string via the VM's cached MIME-type table.
+    /// Interns a MIME type string against the static common-type set.
     pub fn mime_type(&mut self, str_: &[u8]) -> Option<bun_http::MimeType::MimeType> {
-        self.rare_data().mime_type_from_string(str_)
+        bun_http::MimeType::by_name_static(str_)
     }
 
     /// Applies env-derived runtime settings, claims the per-thread source code printer, and adopts `NODE_CHANNEL_FD` for IPC.
@@ -5175,6 +5186,10 @@ impl VirtualMachine {
         self.main_resolved_path.deref();
         self.main_resolved_path = bun_core::String::empty();
         self.unhandled_error_counter = 0;
+        // The finished file's plugins are dropped with its global; the next
+        // `Bun.plugin()` call reinstalls the runner against the new global.
+        self.transpiler.linker.plugin_runner = None;
+        self.plugin_runner = None;
 
         let old_global = self.global;
         // Hold a Rust-side scope across the FFI call so the C++ ThrowScope's exception check is balanced.
@@ -6695,7 +6710,7 @@ impl VirtualMachine {
         if let Some(frame) = top_frame {
             if !frame.position.is_invalid() {
                 let source_url = frame.source_url.to_utf8();
-                let file = bun_paths::resolve_path::relative(dir, source_url.slice());
+                let file = crate::ZigStackFrame::relative_source_url(dir, source_url.slice());
                 let _ = write!(
                     writer,
                     "\n::error file={},line={},col={},title=",
@@ -6757,7 +6772,7 @@ impl VirtualMachine {
             };
             for frame in frames {
                 let source_url = frame.source_url.to_utf8();
-                let file = bun_paths::resolve_path::relative(dir, source_url.slice());
+                let file = crate::ZigStackFrame::relative_source_url(dir, source_url.slice());
                 let func = frame.function_name.to_utf8();
                 if file.is_empty() && func.slice().is_empty() {
                     continue;

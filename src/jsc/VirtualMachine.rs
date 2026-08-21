@@ -5191,16 +5191,17 @@ impl VirtualMachine {
         self.plugin_runner = None;
 
         let old_global = self.global;
-        // Hold a Rust-side scope across the FFI call so the C++ ThrowScope's exception check is balanced.
-        let new_global: *mut JSGlobalObject = {
-            crate::top_scope!(scope, self.global());
-            let new_global = JSGlobalObject::create_for_test_isolation(
+        let new_global: *mut JSGlobalObject = if mode == TestIsolationGlobalMode::ReplaceTestGlobal
+        {
+            JSGlobalObject::create_for_test_isolation(
                 JSGlobalObject::opaque_ref(old_global),
                 self.console.cast(),
-                mode,
-            );
-            let _ = scope.assert_no_exception_except_termination();
-            new_global
+            )
+        } else {
+            JSGlobalObject::create_for_test_environment_host(
+                JSGlobalObject::opaque_ref(old_global),
+                self.console.cast(),
+            )
         };
         self.global = new_global;
         VMHolder::set_cached_global_object(Some(new_global));
@@ -5213,7 +5214,6 @@ impl VirtualMachine {
                 }
             }
         }
-
     }
 
     /// Loads and evaluates a macro entry module, waiting for its promise.

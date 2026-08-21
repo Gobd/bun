@@ -649,7 +649,8 @@ enum class TestIsolationGlobalMode : uint8_t {
     PreserveEnvironmentHost,
 };
 
-extern "C" JSC::JSGlobalObject* Zig__GlobalObject__createForTestIsolation(Zig::GlobalObject* oldGlobal, void* console_client, TestIsolationGlobalMode mode)
+template<TestIsolationGlobalMode mode>
+static JSC::JSGlobalObject* createGlobalForTestIsolation(Zig::GlobalObject* oldGlobal, void* console_client)
 {
     JSC::VM& vm = oldGlobal->vm();
     JSC::JSLockHolder locker(vm);
@@ -669,7 +670,8 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__createForTestIsolation(Zig::G
     // The old global's workers, ports, channels and sockets were stopped by the runtime
     // (Zig__GlobalObject__stopActiveDOMObjectsForTestIsolation) before its sweeps and before this.
     auto* oldContext = oldGlobal->scriptExecutionContext();
-    ASSERT(mode == TestIsolationGlobalMode::PreserveEnvironmentHost || oldContext->activeDOMObjectsAreStopped());
+    if constexpr (mode == TestIsolationGlobalMode::ReplaceTestGlobal)
+        ASSERT(oldContext->activeDOMObjectsAreStopped());
 
     // The new global must inherit the old one's ScriptExecutionContext identifier so that
     // `Bun.isMainThread` (identifier == 1) and cross-thread task dispatch keep working.
@@ -697,7 +699,7 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__createForTestIsolation(Zig::G
     // function returns and the old global is collectable — and would write
     // into the dead cell via NapiHandleScope::open. Point those envs at the
     // new global and adopt the refs before unprotecting the old one.
-    if (mode == TestIsolationGlobalMode::ReplaceTestGlobal)
+    if constexpr (mode == TestIsolationGlobalMode::ReplaceTestGlobal)
         globalObject->adoptNapiEnvsForTestIsolation(oldGlobal);
 
     // The swap replaces this thread's ScriptExecutionContext. If the thread had
@@ -708,7 +710,7 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__createForTestIsolation(Zig::G
         globalObject->m_processEnvObject.set(vm, globalObject, Bun::createSharedEnvironmentVariablesMap(globalObject).getObject());
     }
 
-    if (mode == TestIsolationGlobalMode::ReplaceTestGlobal) {
+    if constexpr (mode == TestIsolationGlobalMode::ReplaceTestGlobal) {
         oldGlobal->onLoadPlugins.clear();
         oldGlobal->onResolvePlugins.clear();
         // Detach the outgoing file's module graph while preserving the environment host's registry.
@@ -718,10 +720,20 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__createForTestIsolation(Zig::G
     }
 
     oldGlobal->isThreadLocalDefaultGlobalObject = false;
-    if (mode == TestIsolationGlobalMode::ReplaceTestGlobal)
+    if constexpr (mode == TestIsolationGlobalMode::ReplaceTestGlobal)
         JSC::gcUnprotect(oldGlobal);
 
     return globalObject;
+}
+
+extern "C" JSC::JSGlobalObject* Zig__GlobalObject__createForTestIsolation(Zig::GlobalObject* oldGlobal, void* console_client)
+{
+    return createGlobalForTestIsolation<TestIsolationGlobalMode::ReplaceTestGlobal>(oldGlobal, console_client);
+}
+
+extern "C" JSC::JSGlobalObject* Zig__GlobalObject__createForTestEnvironmentHost(Zig::GlobalObject* oldGlobal, void* console_client)
+{
+    return createGlobalForTestIsolation<TestIsolationGlobalMode::PreserveEnvironmentHost>(oldGlobal, console_client);
 }
 
 extern "C" void Zig__GlobalObject__releaseTestEnvironmentHost(Zig::GlobalObject* hostGlobal)

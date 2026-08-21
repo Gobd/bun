@@ -1354,6 +1354,13 @@ impl JSGlobalObject {
         Zig__GlobalObject__createForTestIsolation(old_global, console)
     }
 
+    pub(crate) fn create_for_test_environment_host(
+        old_global: &JSGlobalObject,
+        console: *mut c_void,
+    ) -> *mut JSGlobalObject {
+        Zig__GlobalObject__createForTestEnvironmentHost(old_global, console)
+    }
+
     pub fn to_type_error(&self, code: JscError, args: Arguments<'_>) -> JSValue {
         code.fmt(self, args)
     }
@@ -1596,6 +1603,10 @@ unsafe extern "C" {
     // ABI-identical to non-null `*const`); `console` is an opaque pointer C++
     // stores into the new global (never dereferenced as Rust data here).
     safe fn Zig__GlobalObject__createForTestIsolation(
+        old_global: &JSGlobalObject,
+        console: *mut c_void,
+    ) -> *mut JSGlobalObject;
+    safe fn Zig__GlobalObject__createForTestEnvironmentHost(
         old_global: &JSGlobalObject,
         console: *mut c_void,
     ) -> *mut JSGlobalObject;

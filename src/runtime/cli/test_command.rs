@@ -2131,6 +2131,15 @@ impl TestCommand {
         // `exec()` never returns before process exit, so the heap allocation
         // outlives all observers.
         let mut env_loader: Box<DotEnv::Loader> = Box::new(DotEnv::Loader::init());
+        if ctx.test_options.environment.is_some() {
+            if ctx.test_options.no_isolate {
+                bun_core::pretty_errorln!(
+                    "<r><red>error<r>: --environment cannot be used with --no-isolate"
+                );
+                Global::exit(1);
+            }
+            ctx.test_options.isolate = true;
+        }
         jsc::initialize_with(false, ctx.test_options.isolate);
         bun_http::http_thread::init(&Default::default());
 
@@ -2317,6 +2326,7 @@ impl TestCommand {
             vm.test_isolation_enabled = true;
             vm.auto_killer.enabled = true;
         }
+        crate::test_runner::environment::configure(vm, ctx.test_options.environment.as_deref());
 
         if ctx.test_options.coverage.enabled {
             vm.transpiler.options.code_coverage = true;
@@ -3088,6 +3098,16 @@ impl TestCommand {
 
                 let isolate = vm.test_isolation_enabled;
 
+                if let Err(err) = crate::test_runner::environment::initialize(vm) {
+                    handle_top_level_test_error_before_javascript_start(&err);
+                }
+                if vm.test_isolation_state.environment.is_some() {
+                    reporter
+                        .jest
+                        .bun_test_root
+                        .reset_hook_scope_for_test_isolation();
+                }
+
                 if files.len() > 1 {
                     for (i, file_name) in files[0..files.len() - 1].iter().enumerate() {
                         let started = bun::time::milli_timestamp();
@@ -3252,6 +3272,20 @@ impl TestCommand {
                 );
             }
 
+            let environment_guard = if vm.test_isolation_state.environment.is_some() {
+                crate::test_runner::environment::setup_file(vm, file_path)?;
+                let environment_vm = std::ptr::from_mut::<VirtualMachine>(vm);
+                Some(scopeguard::guard((), move |_| {
+                    // SAFETY: the guard is scoped to this loop iteration and `vm`
+                    // remains exclusively borrowed by `run` for that duration.
+                    let _ = unsafe {
+                        crate::test_runner::environment::teardown_file(&mut *environment_vm)
+                    };
+                }))
+            } else {
+                None
+            };
+
             bun_output::scoped_log!(
                 bun_test,
                 "loadEntryPointForTestRunner(\"{}\")",
@@ -3292,6 +3326,12 @@ impl TestCommand {
                         reporter.write_timings_if_needed();
 
                         vm.exit_handler.exit_code = 1;
+                        if let Some(environment_guard) = environment_guard {
+                            scopeguard::ScopeGuard::into_inner(environment_guard);
+                            if crate::test_runner::environment::teardown_file(vm).is_err() {
+                                Output::flush();
+                            }
+                        }
                         vm.is_shutting_down = true;
                         // `global_exit()` diverges, so the `exit_file()` defer
                         // above never fires. Release the active file's
@@ -3383,6 +3423,11 @@ impl TestCommand {
                 // need tracking to remain enabled and populated until then.
                 vm.auto_killer.clear();
                 vm.auto_killer.disable();
+            }
+
+            if let Some(environment_guard) = environment_guard {
+                scopeguard::ScopeGuard::into_inner(environment_guard);
+                crate::test_runner::environment::teardown_file(vm)?;
             }
 
             repeat_index += 1;
